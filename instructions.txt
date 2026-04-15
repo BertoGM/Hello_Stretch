@@ -1,0 +1,12 @@
+Make sure packages required are installed
+Install rosbridge
+
+in bash:
+sudo apt update
+sudo apt install ros-jazzy-rosbridge-server
+
+then source:
+source /opt/ros/jazzy/setup.bash
+
+Then run:
+ros2 launch rosbridge_server rosbridge_websocket_launch.xml

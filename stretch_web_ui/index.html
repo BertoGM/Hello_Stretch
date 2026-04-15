@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Stretch Control</title>
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="style.css">
+
+  <!-- roslib -->
+  <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+</head>
+
+<body>
+  <div class="container">
+    <h1>Stretch Robot Control</h1>
+
+    <!-- CONNECTION -->
+    <div class="card">
+      <h2>Connection</h2>
+      <p>Status: <span id="status">Disconnected</span></p>
+      <button onclick="connectROS()">Connect</button>
+    </div>
+
+    <!-- STATUS DISPLAY -->
+    <div class="card">
+      <h2>Robot Status</h2>
+      <p id="robotStatus">No data yet...</p>
+    </div>
+
+    <!-- HEAD CONTROL -->
+    <div class="card">
+      <h2>Head Control</h2>
+      <input type="range" id="headSlider" min="-1.5" max="1.5" step="0.01">
+      <p>Value: <span id="headValue">0</span></p>
+      <button onclick="sendHead()">Send Head Command</button>
+    </div>
+
+    <!-- BASE CONTROL -->
+    <div class="card">
+      <h2>Base Control</h2>
+      <button onclick="moveForward()">Forward</button>
+      <button onclick="moveBackward()">Backward</button>
+      <button onclick="turnLeft()">Left</button>
+      <button onclick="turnRight()">Right</button>
+      <button onclick="stop()">Stop</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
