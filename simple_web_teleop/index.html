@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Stretch Simple Teleop</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 2rem; max-width: 44rem; }
+    h1 { margin-top: 0; }
+    button { font-size: 1.4rem; padding: 0.9rem 1.8rem; margin: 0.3rem; cursor: pointer; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #status { margin: 1rem 0; font-family: ui-monospace, monospace; }
+    #status.ok  { color: #0a7b21; }
+    #status.err { color: #b00020; }
+    pre { background: #f4f4f4; padding: 0.75rem; max-height: 18rem; overflow: auto; font-size: 0.85rem; }
+    .hint { background: #fff8c4; padding: 0.75rem 1rem; border-left: 4px solid #e0c600; }
+  </style>
+</head>
+<body>
+  <h1>Stretch Simple Teleop</h1>
+
+  <div class="hint">
+    <strong>First-time setup:</strong> the sim's rosbridge uses a self-signed cert.
+    Open <a href="https://localhost:9090" target="_blank">https://localhost:9090</a>
+    in this browser once and click through the warning, otherwise the WebSocket will fail silently.
+  </div>
+
+  <div id="status" class="err">Disconnected</div>
+  <button id="top"    disabled>Arm &#8593; Top</button>
+  <button id="bottom" disabled>Arm &#8595; Bottom</button>
+
+  <h3>Log</h3>
+  <pre id="log"></pre>
+
+  <script>
+    // --- config ---------------------------------------------------------------
+    const ROSBRIDGE_URL = "wss://localhost:9090";
+    const LIFT_TOP_M    = 1.09;  // joint_lift upper limit is ~1.1 m
+    const LIFT_BOTTOM_M = 0.20;
+    const MOVE_TIME_SEC = 3;
+
+    // --- ui helpers -----------------------------------------------------------
+    const statusEl = document.getElementById("status");
+    const logEl    = document.getElementById("log");
+    const topBtn    = document.getElementById("top");
+    const bottomBtn = document.getElementById("bottom");
+
+    const log = (m) => {
+      const line = `${new Date().toISOString().slice(11, 23)}  ${m}`;
+      console.log(line);
+      logEl.textContent = line + "\n" + logEl.textContent;
+    };
+
+    // --- rosbridge over raw websocket -----------------------------------------
+    // rosbridge protocol: https://github.com/RobotWebTools/rosbridge_suite/blob/ros2/ROSBRIDGE_PROTOCOL.md
+    const ws = new WebSocket(ROSBRIDGE_URL);
+    let nextId = 0;
+    const newId = (tag) => `${tag}-${++nextId}`;
+
+    const send = (obj) => {
+      const text = JSON.stringify(obj);
+      log(">> " + text.slice(0, 240) + (text.length > 240 ? "…" : ""));
+      ws.send(text);
+    };
+
+    const callService = (service, type, args = {}) =>
+      send({ op: "call_service", id: newId("svc"), service, type, args });
+
+    // Matches the hello-vinitha/roslibjs#ros2actionclient fork's ActionHandle.createClient:
+    // op "send_goal" with action_name / action_type / goal_msg. Stock rosbridge uses
+    // "send_action_goal" with different field names — the sim's rosbridge runs the fork.
+    const sendActionGoal = (action_name, action_type, goal_msg) =>
+      send({ op: "send_goal", id: newId("goal"), action_name, action_type, goal_msg, feedback: true });
+
+    ws.onopen = () => {
+      statusEl.textContent = `Connected to ${ROSBRIDGE_URL}`;
+      statusEl.className = "ok";
+      topBtn.disabled = false;
+      bottomBtn.disabled = false;
+      log("connected");
+    };
+    ws.onerror = () => {
+      statusEl.textContent =
+        `WebSocket error. Accept the cert at ${ROSBRIDGE_URL.replace("wss", "https")} and reload.`;
+      statusEl.className = "err";
+    };
+    ws.onclose = () => {
+      statusEl.textContent = "Disconnected";
+      statusEl.className = "err";
+      topBtn.disabled = true;
+      bottomBtn.disabled = true;
+      log("closed");
+    };
+    ws.onmessage = (e) => {
+      const s = typeof e.data === "string" ? e.data : "(binary)";
+      log("<< " + s.slice(0, 240) + (s.length > 240 ? "…" : ""));
+    };
+
+    // --- actions --------------------------------------------------------------
+    // Mirrors executePoseGoal() in stretch_web_teleop/src/pages/robot/tsx/robot.tsx:1049 —
+    // switch to navigation mode, then send a FollowJointTrajectory goal.
+    const moveLiftTo = (positionMeters) => {
+      callService("/switch_to_navigation_mode", "std_srvs/srv/Trigger");
+      sendActionGoal(
+        "/stretch_controller/follow_joint_trajectory",
+        "control_msgs/action/FollowJointTrajectory",
+        {
+          trajectory: {
+            header: { stamp: { secs: 0, nsecs: 0 } },
+            joint_names: ["joint_lift"],
+            points: [{
+              positions: [positionMeters],
+              time_from_start: { secs: MOVE_TIME_SEC, nsecs: 0 },
+            }],
+          },
+        }
+      );
+    };
+
+    topBtn.onclick    = () => moveLiftTo(LIFT_TOP_M);
+    bottomBtn.onclick = () => moveLiftTo(LIFT_BOTTOM_M);
+  </script>
+</body>
+</html>
