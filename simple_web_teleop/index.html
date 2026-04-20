@@ -2,49 +2,178 @@
 <title>Stretch Simple Teleop</title>
 <style>
   body { font-family: sans-serif; padding: 2rem; }
-  button { font-size: 1.4rem; padding: 0.8rem 1.6rem; margin: 0.3rem; }
+  button { font-size: 1.2rem; padding: 0.7rem 1.4rem; margin: 0.2rem; }
+  h3 { margin: 1rem 0 0.3rem; }
+  h3:first-child { margin-top: 0; }
+  .layout { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap; }
+  .controls { flex: 1; min-width: 20rem; }
+  #cam { display: block; background: #000; }
 </style>
 
 <h1>Stretch Simple Teleop</h1>
 <p id="status">connecting…</p>
-<button id="top" disabled>Arm Top</button>
-<button id="bottom" disabled>Arm Bottom</button>
+
+<div class="layout">
+  <img id="cam" width="400">
+  <div class="controls">
+    <h3>Arm
+      <span style="font-weight:normal;font-size:0.9rem;color:#555">
+        lift <span id="liftReadout">—</span> m,
+        ext <span id="extReadout">—</span> m
+      </span>
+    </h3>
+    <button class="ctl" id="top">Arm Top</button>
+    <button class="ctl" id="bottom">Arm Bottom</button>
+    <button class="ctl" id="armUp">Arm Up</button>
+    <button class="ctl" id="armDown">Arm Down</button>
+    <button class="ctl" id="armExtend">Extend</button>
+    <button class="ctl" id="armRetract">Retract</button>
+
+    <h3>Gripper</h3>
+    <button class="ctl" id="grab">Grab Ball</button>
+    <button class="ctl" id="drop">Drop Ball</button>
+
+    <h3>Base (hold)</h3>
+    <button class="ctl hold" id="fwd">Forward</button>
+    <button class="ctl hold" id="back">Back</button>
+    <button class="ctl hold" id="rotL">Rotate L</button>
+    <button class="ctl hold" id="rotR">Rotate R</button>
+
+    <h3>Head Camera</h3>
+    <button class="ctl" id="panL">Pan L</button>
+    <button class="ctl" id="panR">Pan R</button>
+    <button class="ctl" id="tiltU">Tilt Up</button>
+    <button class="ctl" id="tiltD">Tilt Down</button>
+  </div>
+</div>
 
 <script>
-  const ws = new WebSocket("wss://localhost:9090");
-  const topBtn = document.getElementById("top");
-  const bottomBtn = document.getElementById("bottom");
-  const statusEl = document.getElementById("status");
+  const CAM_TOPIC = "/camera/color/image_raw/rotated/compressed";
+  const CMD_VEL   = "/stretch/cmd_vel";
+  const LIN = 0.1;      // m/s
+  const ANG = 0.3;      // rad/s
+  const PAN_STEP  = 0.25;
+  const TILT_STEP = 0.15;
 
-  ws.onopen = () => {
-    statusEl.textContent = "connected";
-    topBtn.disabled = bottomBtn.disabled = false;
-  };
-  ws.onclose = () => {
-    statusEl.textContent = "disconnected — accept cert at https://localhost:9090 and reload";
-    topBtn.disabled = bottomBtn.disabled = true;
-  };
+  const ws = new WebSocket("wss://localhost:9090");
+  const statusEl = document.getElementById("status");
+  const cam = document.getElementById("cam");
+  const buttons = document.querySelectorAll("button.ctl");
+  buttons.forEach(b => b.disabled = true);
 
   let id = 0;
   const send = (msg) => ws.send(JSON.stringify({ ...msg, id: `msg-${++id}` }));
 
-  // "send_goal" (not "send_action_goal") matches the hello-vinitha roslibjs fork
-  // that the sim's rosbridge runs.
-  const moveLift = (meters) => {
-    send({ op: "call_service", service: "/switch_to_navigation_mode", type: "std_srvs/srv/Trigger" });
-    send({
-      op: "send_goal",
-      action_name: "/stretch_controller/follow_joint_trajectory",
-      action_type: "control_msgs/action/FollowJointTrajectory",
-      goal_msg: {
-        trajectory: {
-          joint_names: ["joint_lift"],
-          points: [{ positions: [meters], time_from_start: { secs: 3, nsecs: 0 } }],
-        },
+  const setMode = (mode) =>
+    send({ op: "call_service", service: `/switch_to_${mode}_mode`, type: "std_srvs/srv/Trigger" });
+
+  // "send_goal" (not "send_action_goal") matches the hello-vinitha roslibjs fork.
+  const sendTrajectory = (joint_names, positions, seconds) => send({
+    op: "send_goal",
+    action_name: "/stretch_controller/follow_joint_trajectory",
+    action_type: "control_msgs/action/FollowJointTrajectory",
+    goal_msg: {
+      trajectory: {
+        joint_names,
+        points: [{ positions, time_from_start: { secs: seconds, nsecs: 0 } }],
       },
-    });
+    },
+  });
+
+  let liftCurrent = null, extCurrent = null;
+  const liftReadout = document.getElementById("liftReadout");
+  const extReadout  = document.getElementById("extReadout");
+
+  ws.onopen = () => {
+    statusEl.textContent = "connected";
+    buttons.forEach(b => b.disabled = false);
+    send({ op: "subscribe", topic: CAM_TOPIC, type: "sensor_msgs/msg/CompressedImage" });
+    send({ op: "subscribe", topic: "/joint_states", type: "sensor_msgs/msg/JointState" });
+    send({ op: "advertise", topic: CMD_VEL, type: "geometry_msgs/msg/Twist" });
+  };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.op !== "publish") return;
+    if (m.topic === CAM_TOPIC) {
+      cam.src = `data:image/${m.msg.format};base64,${m.msg.data}`;
+    } else if (m.topic === "/joint_states") {
+      const pos = (n) => { const i = m.msg.name.indexOf(n); return i >= 0 ? m.msg.position[i] : null; };
+      const lift = pos("joint_lift");
+      if (lift !== null) { liftCurrent = lift; liftReadout.textContent = lift.toFixed(3); }
+      // wrist_extension = sum of the four telescoping segments
+      const segs = ["joint_arm_l0", "joint_arm_l1", "joint_arm_l2", "joint_arm_l3"].map(pos);
+      if (segs.every(v => v !== null)) {
+        extCurrent = segs.reduce((a, b) => a + b, 0);
+        extReadout.textContent = extCurrent.toFixed(3);
+      }
+    }
+  };
+  ws.onclose = () => {
+    statusEl.textContent = "disconnected — accept cert at https://localhost:9090 and reload";
+    buttons.forEach(b => b.disabled = true);
   };
 
-  topBtn.onclick = () => moveLift(1.09);
-  bottomBtn.onclick = () => moveLift(0.20);
+  // Arm — Top/Bottom/Extend/Retract absolute; Up/Down nudge lift from live joint_states.
+  const LIFT_MIN = 0.15, LIFT_MAX = 1.09, LIFT_STEP = 0.05;
+  const nudgeLift = (dz) => {
+    if (liftCurrent === null) return;
+    setMode("navigation");
+    sendTrajectory(["joint_lift"], [clamp(liftCurrent + dz, LIFT_MIN, LIFT_MAX)], 1);
+  };
+  document.getElementById("top").onclick        = () => { setMode("navigation"); sendTrajectory(["joint_lift"],      [1.09],  3); };
+  document.getElementById("bottom").onclick     = () => { setMode("navigation"); sendTrajectory(["joint_lift"],      [0.687], 3); };
+  document.getElementById("armUp").onclick      = () => nudgeLift( LIFT_STEP);
+  document.getElementById("armDown").onclick    = () => nudgeLift(-LIFT_STEP);
+  document.getElementById("armExtend").onclick  = () => { setMode("navigation"); sendTrajectory(["wrist_extension"], [0.346], 3); };
+  document.getElementById("armRetract").onclick = () => { setMode("navigation"); sendTrajectory(["wrist_extension"], [0.150], 3); };
+
+  // Gripper: gripper_aperture in meters, ~0 closed, ~0.10 open.
+  document.getElementById("grab").onclick = () => { setMode("navigation"); sendTrajectory(["gripper_aperture"], [0.00], 2); };
+  document.getElementById("drop").onclick = () => { setMode("navigation"); sendTrajectory(["gripper_aperture"], [0.10], 2); };
+
+  // Base: hold to drive, release to stop. Publish Twist at 10 Hz so the
+  // driver's safety timeout doesn't cut us off mid-motion.
+  const twist = (lin, ang) => ({
+    linear:  { x: lin, y: 0, z: 0 },
+    angular: { x: 0,   y: 0, z: ang },
+  });
+  let baseTimer = null;
+  const startDrive = (lin, ang) => {
+    if (baseTimer) return;
+    setMode("navigation");
+    const pub = () => send({ op: "publish", topic: CMD_VEL, msg: twist(lin, ang) });
+    pub();
+    baseTimer = setInterval(pub, 100);
+  };
+  const stopDrive = () => {
+    if (!baseTimer) return;
+    clearInterval(baseTimer);
+    baseTimer = null;
+    send({ op: "publish", topic: CMD_VEL, msg: twist(0, 0) });
+  };
+  const wireHold = (sel, lin, ang) => {
+    const el = document.getElementById(sel);
+    el.onmousedown  = () => startDrive(lin, ang);
+    el.onmouseup    = stopDrive;
+    el.onmouseleave = stopDrive;
+  };
+  wireHold("fwd",   LIN, 0);
+  wireHold("back", -LIN, 0);
+  wireHold("rotL",  0,   ANG);
+  wireHold("rotR",  0,  -ANG);
+
+  // Head: buttons nudge absolute pan/tilt (tracked locally, assumed to start at 0).
+  let pan = 0, tilt = 0;
+  const PAN_MIN = -3.9, PAN_MAX = 1.7, TILT_MIN = -1.5, TILT_MAX = 0.5;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const nudgeHead = (dp, dt) => {
+    pan  = clamp(pan  + dp, PAN_MIN,  PAN_MAX);
+    tilt = clamp(tilt + dt, TILT_MIN, TILT_MAX);
+    setMode("navigation");
+    sendTrajectory(["joint_head_pan", "joint_head_tilt"], [pan, tilt], 1);
+  };
+  document.getElementById("panL").onclick  = () => nudgeHead( PAN_STEP, 0);
+  document.getElementById("panR").onclick  = () => nudgeHead(-PAN_STEP, 0);
+  document.getElementById("tiltU").onclick = () => nudgeHead(0,  TILT_STEP);
+  document.getElementById("tiltD").onclick = () => nudgeHead(0, -TILT_STEP);
 </script>
