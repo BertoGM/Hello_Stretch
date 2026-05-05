@@ -5,59 +5,68 @@
   button { font-size: 1.2rem; padding: 0.7rem 1.4rem; margin: 0.2rem; }
   h3 { margin: 1rem 0 0.3rem; }
   h3:first-child { margin-top: 0; }
-  .layout { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap; }
-  .controls { flex: 1; min-width: 20rem; }
-  #cam { display: block; background: #000; }
+  .controls { max-width: 40rem; }
 </style>
 
 <h1>Stretch Simple Teleop</h1>
 <p id="status">connecting…</p>
 
-<div class="layout">
-  <img id="cam" width="400">
-  <div class="controls">
-    <h3>Arm
-      <span style="font-weight:normal;font-size:0.9rem;color:#555">
-        lift <span id="liftReadout">—</span> m,
-        ext <span id="extReadout">—</span> m
-      </span>
-    </h3>
-    <button class="ctl" id="top">Arm Top</button>
-    <button class="ctl" id="bottom">Arm Bottom</button>
-    <button class="ctl" id="armUp">Arm Up</button>
-    <button class="ctl" id="armDown">Arm Down</button>
-    <button class="ctl" id="armExtend">Extend</button>
-    <button class="ctl" id="armRetract">Retract</button>
+<div class="controls">
+  <h3>Arm
+    <span style="font-weight:normal;font-size:0.9rem;color:#555">
+      lift <span id="liftReadout">—</span> m,
+      ext <span id="extReadout">—</span> m,
+      grip <span id="gripReadout">—</span> m
+    </span>
+  </h3>
+  <button class="ctl hold" id="armUp">Arm Up</button>
+  <button class="ctl hold" id="armDown">Arm Down</button>
+  <button class="ctl hold" id="armExtend">Extend</button>
+  <button class="ctl hold" id="armRetract">Retract</button>
 
-    <h3>Gripper</h3>
-    <button class="ctl" id="grab">Grab Ball</button>
-    <button class="ctl" id="drop">Drop Ball</button>
+  <h3>Wrist
+    <span style="font-weight:normal;font-size:0.9rem;color:#555">
+      yaw <span id="yawReadout">—</span>,
+      pitch <span id="pitchReadout">—</span>,
+      roll <span id="rollReadout">—</span> rad
+    </span>
+  </h3>
+  <button class="ctl hold" id="wristUp">Wrist Up</button>
+  <button class="ctl hold" id="wristDown">Wrist Down</button>
+  <button class="ctl hold" id="twistL">Twist L</button>
+  <button class="ctl hold" id="twistR">Twist R</button>
+  <button class="ctl hold" id="rotL">Rotate L</button>
+  <button class="ctl hold" id="rotR">Rotate R</button>
 
-    <h3>Base (hold)</h3>
-    <button class="ctl hold" id="fwd">Forward</button>
-    <button class="ctl hold" id="back">Back</button>
-    <button class="ctl hold" id="rotL">Rotate L</button>
-    <button class="ctl hold" id="rotR">Rotate R</button>
+  <h3>Base (hold)</h3>
+  <button class="ctl hold" id="fwd">Forward</button>
+  <button class="ctl hold" id="back">Back</button>
+  <button class="ctl hold" id="baseRotL">Rotate L</button>
+  <button class="ctl hold" id="baseRotR">Rotate R</button>
 
-    <h3>Head Camera</h3>
-    <button class="ctl" id="panL">Pan L</button>
-    <button class="ctl" id="panR">Pan R</button>
-    <button class="ctl" id="tiltU">Tilt Up</button>
-    <button class="ctl" id="tiltD">Tilt Down</button>
-  </div>
+  <h3>Pose Library (base-relative)</h3>
+  <input id="poseName" placeholder="pose name" style="font-size:1rem;padding:0.4rem;">
+  <button class="ctl" id="savePose">Save Pose</button>
+  <div id="playback" style="margin-top:0.5rem;"></div>
+
+  <h3>Pose Library (world)
+    <span style="font-weight:normal;font-size:0.9rem;color:#555">
+      via <code>pose_library_server.py</code> + tf2
+    </span>
+  </h3>
+  <input id="worldPoseName" placeholder="world pose name" style="font-size:1rem;padding:0.4rem;">
+  <select id="worldPoseFrame" style="font-size:1rem;padding:0.4rem;">
+    <option value="odom">odom (world)</option>
+    <option value="target_frame">target_frame (ArUco id 1)</option>
+    <option value="map">map (if localized)</option>
+  </select>
+  <button class="ctl" id="saveWorldPose">Save World Pose</button>
+  <div id="worldPlayback" style="margin-top:0.5rem;"></div>
 </div>
 
 <script>
-  const CAM_TOPIC = "/camera/color/image_raw/rotated/compressed";
-  const CMD_VEL   = "/stretch/cmd_vel";
-  const LIN = 0.1;      // m/s
-  const ANG = 0.3;      // rad/s
-  const PAN_STEP  = 0.25;
-  const TILT_STEP = 0.15;
-
   const ws = new WebSocket("wss://localhost:9090");
   const statusEl = document.getElementById("status");
-  const cam = document.getElementById("cam");
   const buttons = document.querySelectorAll("button.ctl");
   buttons.forEach(b => b.disabled = true);
 
@@ -80,32 +89,52 @@
     },
   });
 
-  let liftCurrent = null, extCurrent = null;
-  const liftReadout = document.getElementById("liftReadout");
-  const extReadout  = document.getElementById("extReadout");
+  let liftCurrent = null, extCurrent = null, gripCurrent = null;
+  let yawCurrent = null, pitchCurrent = null, rollCurrent = null;
+  const liftReadout  = document.getElementById("liftReadout");
+  const extReadout   = document.getElementById("extReadout");
+  const gripReadout  = document.getElementById("gripReadout");
+  const yawReadout   = document.getElementById("yawReadout");
+  const pitchReadout = document.getElementById("pitchReadout");
+  const rollReadout  = document.getElementById("rollReadout");
 
   ws.onopen = () => {
     statusEl.textContent = "connected";
     buttons.forEach(b => b.disabled = false);
-    send({ op: "subscribe", topic: CAM_TOPIC, type: "sensor_msgs/msg/CompressedImage" });
-    send({ op: "subscribe", topic: "/joint_states", type: "sensor_msgs/msg/JointState" });
-    send({ op: "advertise", topic: CMD_VEL, type: "geometry_msgs/msg/Twist" });
+    send({ op: "subscribe", topic: "/stretch/joint_states", type: "sensor_msgs/msg/JointState" });
+    // World pose library: server publishes a JSON array of names whenever
+    // the saved set changes. Latched (transient_local) so we get the current
+    // list right after subscribing.
+    send({ op: "subscribe", topic: "/pose_library/names", type: "std_msgs/msg/String" });
+    send({ op: "advertise", topic: "/pose_library/save",   type: "std_msgs/msg/String" });
+    send({ op: "advertise", topic: "/pose_library/play",   type: "std_msgs/msg/String" });
+    send({ op: "advertise", topic: "/pose_library/delete", type: "std_msgs/msg/String" });
+    send({ op: "advertise", topic: "/stretch/cmd_vel",     type: "geometry_msgs/msg/Twist" });
   };
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.op !== "publish") return;
-    if (m.topic === CAM_TOPIC) {
-      cam.src = `data:image/${m.msg.format};base64,${m.msg.data}`;
-    } else if (m.topic === "/joint_states") {
+    if (m.topic === "/pose_library/names") {
+      try { renderWorldPoses(JSON.parse(m.msg.data)); }
+      catch (err) { console.error("bad names payload", err, m.msg.data); }
+      return;
+    }
+    if (m.topic === "/stretch/joint_states") {
       const pos = (n) => { const i = m.msg.name.indexOf(n); return i >= 0 ? m.msg.position[i] : null; };
       const lift = pos("joint_lift");
       if (lift !== null) { liftCurrent = lift; liftReadout.textContent = lift.toFixed(3); }
-      // wrist_extension = sum of the four telescoping segments
-      const segs = ["joint_arm_l0", "joint_arm_l1", "joint_arm_l2", "joint_arm_l3"].map(pos);
-      if (segs.every(v => v !== null)) {
-        extCurrent = segs.reduce((a, b) => a + b, 0);
-        extReadout.textContent = extCurrent.toFixed(3);
-      }
+      const ext = pos("wrist_extension");
+      if (ext !== null) { extCurrent = ext; extReadout.textContent = ext.toFixed(3); }
+      // Driver publishes finger joints, not gripper_aperture; use the left finger
+      // as our read+write joint so save/replay round-trip cleanly.
+      const grip = pos("joint_gripper_finger_left");
+      if (grip !== null) { gripCurrent = grip; gripReadout.textContent = grip.toFixed(3); }
+      const yaw = pos("joint_wrist_yaw");
+      if (yaw !== null) { yawCurrent = yaw; yawReadout.textContent = yaw.toFixed(3); }
+      const pitch = pos("joint_wrist_pitch");
+      if (pitch !== null) { pitchCurrent = pitch; pitchReadout.textContent = pitch.toFixed(3); }
+      const roll = pos("joint_wrist_roll");
+      if (roll !== null) { rollCurrent = roll; rollReadout.textContent = roll.toFixed(3); }
     }
   };
   ws.onclose = () => {
@@ -113,26 +142,89 @@
     buttons.forEach(b => b.disabled = true);
   };
 
-  // Arm — Top/Bottom/Extend/Retract absolute; Up/Down nudge lift from live joint_states.
-  const LIFT_MIN = 0.15, LIFT_MAX = 1.09, LIFT_STEP = 0.05;
-  const nudgeLift = (dz) => {
-    if (liftCurrent === null) return;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  // Arm — hold to drive a joint; release to stop. Each tick we send a fresh
+  // trajectory goal slightly ahead of the current joint position; the new goal
+  // preempts the previous, producing smooth motion. On release we send a goal
+  // to the current value so the joint holds in place.
+  const LIFT_MIN  = 0.15, LIFT_MAX  = 1.09;
+  const EXT_MIN   = 0.00, EXT_MAX   = 0.50;
+  const YAW_MIN   = -1.75, YAW_MAX  = 4.00;   // wrist yaw, rad
+  const PITCH_MIN = -1.57, PITCH_MAX = 0.56;  // wrist pitch, rad
+  const ROLL_MIN  = -2.96, ROLL_MAX = 2.96;   // wrist roll, rad
+  const TICK_MS   = 100;          // 10 Hz
+  const LIFT_RATE = 0.08;         // m/s
+  const EXT_RATE  = 0.08;         // m/s
+  const WRIST_RATE = 0.6;         // rad/s (yaw/pitch/roll)
+  const TIME_FROM_START_NS = 250000000;  // 0.25s — slightly > tick
+
+  const sendTrajNs = (joint, position, ns) => send({
+    op: "send_goal",
+    action_name: "/stretch_controller/follow_joint_trajectory",
+    action_type: "control_msgs/action/FollowJointTrajectory",
+    goal_msg: {
+      trajectory: {
+        joint_names: [joint],
+        points: [{ positions: [position], time_from_start: { secs: 0, nsecs: ns } }],
+      },
+    },
+  });
+
+  let armTimer = null;
+  const startHold = (joint, getCurrent, dir, rate, lo, hi) => {
+    if (armTimer) return;
     setMode("navigation");
-    sendTrajectory(["joint_lift"], [clamp(liftCurrent + dz, LIFT_MIN, LIFT_MAX)], 1);
+    const tick = () => {
+      const cur = getCurrent();
+      if (cur === null) return;
+      const target = clamp(cur + dir * rate * (TICK_MS / 1000) * 4, lo, hi);
+      sendTrajNs(joint, target, TIME_FROM_START_NS);
+    };
+    tick();
+    armTimer = setInterval(tick, TICK_MS);
   };
-  document.getElementById("top").onclick        = () => { setMode("navigation"); sendTrajectory(["joint_lift"],      [1.09],  3); };
-  document.getElementById("bottom").onclick     = () => { setMode("navigation"); sendTrajectory(["joint_lift"],      [0.687], 3); };
-  document.getElementById("armUp").onclick      = () => nudgeLift( LIFT_STEP);
-  document.getElementById("armDown").onclick    = () => nudgeLift(-LIFT_STEP);
-  document.getElementById("armExtend").onclick  = () => { setMode("navigation"); sendTrajectory(["wrist_extension"], [0.346], 3); };
-  document.getElementById("armRetract").onclick = () => { setMode("navigation"); sendTrajectory(["wrist_extension"], [0.150], 3); };
+  const stopHold = (joint, getCurrent) => {
+    if (!armTimer) return;
+    clearInterval(armTimer);
+    armTimer = null;
+    const cur = getCurrent();
+    if (cur !== null) sendTrajNs(joint, cur, TIME_FROM_START_NS);
+  };
 
-  // Gripper: gripper_aperture in meters, ~0 closed, ~0.10 open.
-  document.getElementById("grab").onclick = () => { setMode("navigation"); sendTrajectory(["gripper_aperture"], [0.00], 2); };
-  document.getElementById("drop").onclick = () => { setMode("navigation"); sendTrajectory(["gripper_aperture"], [0.10], 2); };
+  const wireHoldJoint = (sel, joint, getCurrent, dir, rate, lo, hi) => {
+    const el = document.getElementById(sel);
+    const start = (e) => { e.preventDefault(); startHold(joint, getCurrent, dir, rate, lo, hi); };
+    const stop  = (e) => { if (e) e.preventDefault(); stopHold(joint, getCurrent); };
+    el.onmousedown  = start;
+    el.onmouseup    = stop;
+    el.onmouseleave = stop;
+    el.ontouchstart = start;
+    el.ontouchend   = stop;
+    el.ontouchcancel = stop;
+  };
 
-  // Base: hold to drive, release to stop. Publish Twist at 10 Hz so the
-  // driver's safety timeout doesn't cut us off mid-motion.
+  const getLift  = () => liftCurrent;
+  const getExt   = () => extCurrent;
+  const getYaw   = () => yawCurrent;
+  const getPitch = () => pitchCurrent;
+  const getRoll  = () => rollCurrent;
+  wireHoldJoint("armUp",      "joint_lift",        getLift,  +1, LIFT_RATE,  LIFT_MIN,  LIFT_MAX);
+  wireHoldJoint("armDown",    "joint_lift",        getLift,  -1, LIFT_RATE,  LIFT_MIN,  LIFT_MAX);
+  wireHoldJoint("armExtend",  "wrist_extension",   getExt,   +1, EXT_RATE,   EXT_MIN,   EXT_MAX);
+  wireHoldJoint("armRetract", "wrist_extension",   getExt,   -1, EXT_RATE,   EXT_MIN,   EXT_MAX);
+  wireHoldJoint("wristUp",    "joint_wrist_pitch", getPitch, +1, WRIST_RATE, PITCH_MIN, PITCH_MAX);
+  wireHoldJoint("wristDown",  "joint_wrist_pitch", getPitch, -1, WRIST_RATE, PITCH_MIN, PITCH_MAX);
+  wireHoldJoint("twistL",     "joint_wrist_roll",  getRoll,  +1, WRIST_RATE, ROLL_MIN,  ROLL_MAX);
+  wireHoldJoint("twistR",     "joint_wrist_roll",  getRoll,  -1, WRIST_RATE, ROLL_MIN,  ROLL_MAX);
+  wireHoldJoint("rotL",       "joint_wrist_yaw",   getYaw,   +1, WRIST_RATE, YAW_MIN,   YAW_MAX);
+  wireHoldJoint("rotR",       "joint_wrist_yaw",   getYaw,   -1, WRIST_RATE, YAW_MIN,   YAW_MAX);
+
+  // Base — hold to drive, release to stop. Publishes Twist at 10 Hz so the
+  // driver's safety timeout doesn't cut motion off mid-press.
+  const CMD_VEL = "/stretch/cmd_vel";
+  const LIN = 0.1;   // m/s
+  const ANG = 0.3;   // rad/s
   const twist = (lin, ang) => ({
     linear:  { x: lin, y: 0, z: 0 },
     angular: { x: 0,   y: 0, z: ang },
@@ -151,29 +243,156 @@
     baseTimer = null;
     send({ op: "publish", topic: CMD_VEL, msg: twist(0, 0) });
   };
-  const wireHold = (sel, lin, ang) => {
+  const wireHoldBase = (sel, lin, ang) => {
     const el = document.getElementById(sel);
-    el.onmousedown  = () => startDrive(lin, ang);
-    el.onmouseup    = stopDrive;
-    el.onmouseleave = stopDrive;
+    const start = (e) => { e.preventDefault(); startDrive(lin, ang); };
+    const stop  = (e) => { if (e) e.preventDefault(); stopDrive(); };
+    el.onmousedown   = start;
+    el.onmouseup     = stop;
+    el.onmouseleave  = stop;
+    el.ontouchstart  = start;
+    el.ontouchend    = stop;
+    el.ontouchcancel = stop;
   };
-  wireHold("fwd",   LIN, 0);
-  wireHold("back", -LIN, 0);
-  wireHold("rotL",  0,   ANG);
-  wireHold("rotR",  0,  -ANG);
+  wireHoldBase("fwd",       LIN, 0);
+  wireHoldBase("back",     -LIN, 0);
+  wireHoldBase("baseRotL",  0,  ANG);
+  wireHoldBase("baseRotR",  0, -ANG);
 
-  // Head: buttons nudge absolute pan/tilt (tracked locally, assumed to start at 0).
-  let pan = 0, tilt = 0;
-  const PAN_MIN = -3.9, PAN_MAX = 1.7, TILT_MIN = -1.5, TILT_MAX = 0.5;
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-  const nudgeHead = (dp, dt) => {
-    pan  = clamp(pan  + dp, PAN_MIN,  PAN_MAX);
-    tilt = clamp(tilt + dt, TILT_MIN, TILT_MAX);
-    setMode("navigation");
-    sendTrajectory(["joint_head_pan", "joint_head_tilt"], [pan, tilt], 1);
+  // Pose library: snapshot lift/extension/gripper from live joint_states,
+  // persist in localStorage, render one playback button per saved pose.
+  const POSE_KEY = "stretch_simple_poses_v1";
+  const playback = document.getElementById("playback");
+  const poseNameInput = document.getElementById("poseName");
+
+  const loadPoses = () => {
+    try { return JSON.parse(localStorage.getItem(POSE_KEY) || "[]"); }
+    catch { return []; }
   };
-  document.getElementById("panL").onclick  = () => nudgeHead( PAN_STEP, 0);
-  document.getElementById("panR").onclick  = () => nudgeHead(-PAN_STEP, 0);
-  document.getElementById("tiltU").onclick = () => nudgeHead(0,  TILT_STEP);
-  document.getElementById("tiltD").onclick = () => nudgeHead(0, -TILT_STEP);
+  const writePoses = (poses) => localStorage.setItem(POSE_KEY, JSON.stringify(poses));
+
+  const playPose = (p) => {
+    setMode("navigation");
+    const pairs = [
+      ["joint_lift",                 p.lift],
+      ["wrist_extension",            p.ext],
+      ["joint_gripper_finger_left",  p.grip],
+      ["joint_wrist_yaw",            p.yaw],
+      ["joint_wrist_pitch",          p.pitch],
+      ["joint_wrist_roll",           p.roll],
+    ].filter(([, v]) => typeof v === "number");
+    sendTrajectory(pairs.map(p => p[0]), pairs.map(p => p[1]), 3);
+  };
+
+  const renderPoses = () => {
+    playback.innerHTML = "";
+    loadPoses().forEach((p, i) => {
+      const wrap = document.createElement("span");
+      wrap.style.display = "inline-block";
+      wrap.style.marginRight = "0.3rem";
+
+      const play = document.createElement("button");
+      play.className = "ctl";
+      play.textContent = p.name;
+      const fmt = (v) => (typeof v === "number" ? v.toFixed(3) : "—");
+      play.title =
+        `lift ${fmt(p.lift)}, ext ${fmt(p.ext)}, grip ${fmt(p.grip)}\n` +
+        `yaw ${fmt(p.yaw)}, pitch ${fmt(p.pitch)}, roll ${fmt(p.roll)}`;
+      play.onclick = () => playPose(p);
+
+      const del = document.createElement("button");
+      del.className = "ctl";
+      del.textContent = "✕";
+      del.style.padding = "0.4rem 0.6rem";
+      del.title = "delete";
+      del.onclick = () => {
+        const poses = loadPoses();
+        poses.splice(i, 1);
+        writePoses(poses);
+        renderPoses();
+      };
+
+      wrap.append(play, del);
+      playback.append(wrap);
+    });
+  };
+
+  // -------- World pose library: thin client over /pose_library/* topics ----
+  // The Python node (pose_library_server.py) does the tf2 work using the
+  // lab's recommended lookup_transform / tf_buffer.transform functions.
+  // We just send names and render the list of available poses.
+  const worldPlayback = document.getElementById("worldPlayback");
+  const worldPoseInput = document.getElementById("worldPoseName");
+
+  const publishString = (topic, data) =>
+    send({ op: "publish", topic, msg: { data } });
+
+  const renderWorldPoses = (names) => {
+    worldPlayback.innerHTML = "";
+    if (!names.length) {
+      const hint = document.createElement("span");
+      hint.style.color = "#888";
+      hint.style.fontSize = "0.9rem";
+      hint.textContent = "no world poses yet";
+      worldPlayback.append(hint);
+      return;
+    }
+    names.forEach(name => {
+      const wrap = document.createElement("span");
+      wrap.style.display = "inline-block";
+      wrap.style.marginRight = "0.3rem";
+
+      const play = document.createElement("button");
+      play.className = "ctl";
+      play.textContent = name;
+      play.title = "Replay via tf2: project saved world pose into current base_link";
+      play.onclick = () => publishString("/pose_library/play", name);
+
+      const del = document.createElement("button");
+      del.className = "ctl";
+      del.textContent = "✕";
+      del.style.padding = "0.4rem 0.6rem";
+      del.title = "delete";
+      del.onclick = () => publishString("/pose_library/delete", name);
+
+      wrap.append(play, del);
+      worldPlayback.append(wrap);
+    });
+  };
+  renderWorldPoses([]);
+
+  const worldPoseFrame = document.getElementById("worldPoseFrame");
+  document.getElementById("saveWorldPose").onclick = () => {
+    const name = worldPoseInput.value.trim();
+    if (!name) { alert("name required"); return; }
+    const frame = worldPoseFrame.value;
+    // Server accepts "frame|name" — falls back to odom if no pipe.
+    publishString("/pose_library/save", `${frame}|${name}`);
+    worldPoseInput.value = "";
+    // The names list will refresh when the server republishes /pose_library/names.
+  };
+
+  document.getElementById("savePose").onclick = () => {
+    const all = [liftCurrent, extCurrent, gripCurrent, yawCurrent, pitchCurrent, rollCurrent];
+    if (all.some(v => v === null)) {
+      alert("waiting for joint_states — try again in a moment");
+      return;
+    }
+    const name = (poseNameInput.value.trim() || `pose ${loadPoses().length + 1}`);
+    const poses = loadPoses();
+    poses.push({
+      name,
+      lift:  liftCurrent,
+      ext:   extCurrent,
+      grip:  gripCurrent,
+      yaw:   yawCurrent,
+      pitch: pitchCurrent,
+      roll:  rollCurrent,
+    });
+    writePoses(poses);
+    poseNameInput.value = "";
+    renderPoses();
+  };
+
+  renderPoses();
 </script>
